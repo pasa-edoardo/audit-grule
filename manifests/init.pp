@@ -470,26 +470,21 @@ class auditd (
   validate_bool($service_enable)
 
   # Install package
-  
-  if ! $manage_rules_group {
-    package { $package_name:
-      ensure => 'present',
-      alias  => 'auditd',
-      before => [
-        File['/etc/audit/auditd.conf'],
-        File['/etc/audisp/audispd.conf'],
-        Concat['audit-file'],
-      ]
-    }
+  $before = [
+      File['/etc/audit/auditd.conf'],
+      File['/etc/audisp/audispd.conf'],
+    ]
+  if $manage_rules_group {
+    $before = Concat['audit-file']
   }else{
-    package { $package_name:
-      ensure => 'present',
-      alias  => 'auditd',
-      before => [
-        File['/etc/audit/auditd.conf'],
-        File['/etc/audisp/audispd.conf'],
-      ]
+    $rule_groups.each | String $file | {
+      $before = $before + Concat[$file]
     }
+  }
+  package { $package_name:
+    ensure => 'present',
+    alias  => 'auditd',
+    before => $before,
   }
 
   # Configure required config files
@@ -561,7 +556,10 @@ class auditd (
   }
 
   # Manage the service
-  $subscribe = [ File['/etc/audit/auditd.conf'],File['/etc/audisp/audispd.conf'] ]
+  $subscribe = [ 
+    File['/etc/audit/auditd.conf'],
+    File['/etc/audisp/audispd.conf'],
+  ]
   if $manage_service and ! $rule_groups_path {
     $subscribe = $subscribe + Concat['audit-file']
   }else{
