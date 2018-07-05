@@ -1,5 +1,6 @@
 class auditd::params {
 
+
   # OS specific variables.
   case $::osfamily {
     'Debian': {
@@ -25,6 +26,9 @@ class auditd::params {
         $audisp_package     = 'audit-audispd-plugins'
         $manage_audit_files = true
         $rules_file         = '/etc/audit/rules.d/puppet.rules'
+        $rule_groups             = undef
+        $manage_rules_group      = false 
+        $rule_groups_path        = '/etc/audit/rules.d/'
         $service_restart    = '/bin/systemctl restart auditd'
         $service_stop       = '/bin/systemctl stop auditd'
       }
@@ -43,6 +47,9 @@ class auditd::params {
 
       if $::operatingsystem != 'Amazon' and versioncmp($::operatingsystemrelease, '7') >= 0 {
         $rules_file      = '/etc/audit/rules.d/puppet.rules'
+        $rule_groups             = undef
+        $manage_rules_group      = false 
+        $rule_groups_path        = '/etc/audit/rules.d/'
         $service_restart = '/usr/libexec/initscripts/legacy-actions/auditd/restart'
         $service_stop    = '/usr/libexec/initscripts/legacy-actions/auditd/stop'
       } else {
@@ -76,6 +83,7 @@ class auditd::params {
   $log_file                = '/var/log/audit/audit.log'
   $log_format              = 'RAW'
   $log_group               = 'root'
+  $write_logs              = undef
   $priority_boost          = '4'
   $flush                   = 'incremental'
   $freq                    = '20'
@@ -101,6 +109,7 @@ class auditd::params {
   $enable_krb5             = 'no'
   $krb5_principal          = 'auditd'
   $krb5_key_file           = undef
+
 
   # Rules Header variables
   $buffer_size = '8192'

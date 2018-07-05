@@ -34,6 +34,12 @@
 #   permissions. The default is root. The group name can be either numeric
 #   or spelled out.
 #
+# [*write_logs*]
+#   This yes/no keyword determines whether or not to write logs to the disk.
+#   There are two options: yes and no. It is meant to replace the usage of
+#   log_format = NOLOG. This will default to undef since it is only available
+#   in version >= 2.5.2.
+#
 # [*priority_boost*]
 #   This is a non-negative number that tells the audit damon how much of
 #   a priority boost it should take. The default is 3. No change is 0.
@@ -229,10 +235,19 @@
 #
 # [*rules_file*]
 #   Location of the Audit rules file.
+# 
+# [*rules_group*]
+#   Array containing the name of files where will be store audit's rules.
+# 
+# [*rule_groups_path*]
+#   Location of the Audit's rules directory by default is /etc/audit/rules.d/.
 #
 # [*manage_audit_files*]
 #   On systems with 'rules.d' directory whether or not to manage that directory
 #   removing rules not managed by Puppet.
+#
+# [*manage_rules_group*]
+#   Disable puppet.rules creation and enable *rules_group* for group Audit rules.
 #
 # [*buffer_size*]
 #   Sets the buffer size used by Auditd.
@@ -321,6 +336,7 @@ class auditd (
   $log_file                = $::auditd::params::log_file,
   $log_format              = $::auditd::params::log_format,
   $log_group               = $::auditd::params::log_group,
+  $write_logs              = $::auditd::params::write_logs,
   $priority_boost          = $::auditd::params::priority_boost,
   $flush                   = $::auditd::params::flush,
   $freq                    = $::auditd::params::freq,
@@ -349,6 +365,9 @@ class auditd (
 
   # Variables for Audit files
   $rules_file              = $::auditd::params::rules_file,
+  $rule_groups             = $::auditd::params::rule_groups,
+  $rule_groups_path        = $::auditd::params::rule_groups_path,
+  $manage_rules_group      = $::auditd::params::manage_rules_group,
   $manage_audit_files      = $::auditd::params::manage_audit_files,
   $buffer_size             = $::auditd::params::buffer_size,
 
@@ -379,6 +398,10 @@ class auditd (
   validate_re($log_format, '^(RAW|NOLOG)$',
     "${log_format} is not supported for log_format. Allowed values are 'RAW' and 'NOLOG'.")
   validate_string($log_group)
+  if $write_logs != undef {
+    validate_re($write_logs, '^(yes|no)$',
+      "${write_logs} is not supported for write_logs. Allowed values are 'yes' and 'no'.")
+  }
   validate_integer($priority_boost)
   validate_re($flush, '^(none|incremental|data|sync)$',
     "${flush} is not supported for flush. Allowed values are 'none', 'incremental', 'data' and 'sync'.")
@@ -423,7 +446,12 @@ class auditd (
   }
 
   validate_absolute_path($rules_file)
+  validate_absolute_path($rule_groups_path)
+  $rule_groups.each | String $file | {
+    validate_string($file)
+  }
   validate_bool($manage_audit_files)
+  validate_bool($manage_rules_group)
   validate_integer($buffer_size)
 
   validate_integer($audisp_q_depth)
@@ -442,14 +470,21 @@ class auditd (
   validate_bool($service_enable)
 
   # Install package
+  $before = [
+      File['/etc/audit/auditd.conf'],
+      File['/etc/audisp/audispd.conf'],
+    ]
+  if $manage_rules_group {
+    $before = Concat['audit-file']
+  }else{
+    $rule_groups.each | String $file | {
+      $before = $before + Concat[$file]
+    }
+  }
   package { $package_name:
     ensure => 'present',
     alias  => 'auditd',
-    before => [
-      File['/etc/audit/auditd.conf'],
-      File['/etc/audisp/audispd.conf'],
-      Concat['audit-file'],
-    ],
+    before => $before,
   }
 
   # Configure required config files
@@ -471,20 +506,42 @@ class auditd (
       require => Package[$package_name],
     }
   }
-  concat { $rules_file:
-    ensure         => 'present',
-    owner          => 'root',
-    group          => 'root',
-    mode           => '0640',
-    ensure_newline => true,
-    warn           => true,
-    alias          => 'audit-file',
+  if ! $manage_rules_group { 
+    concat { $rules_file:
+      ensure         => 'present',
+      owner          => 'root',
+      group          => 'root',
+      mode           => '0640',
+      ensure_newline => true,
+      warn           => true,
+      alias          => 'audit-file',
+    }
+
+    concat::fragment{ 'auditd_rules_begin':
+      target  => $rules_file,
+      content => template('auditd/audit.rules.begin.fragment.erb'),
+      order   => 0
+    }
   }
-  concat::fragment{ 'auditd_rules_begin':
-    target  => $rules_file,
-    content => template('auditd/audit.rules.begin.fragment.erb'),
-    order   => 0
+  if $manage_rules_group { 
+    $rule_groups.each | String $grfile | {
+      concat { "${rule_groups_path}${grfile}":
+        ensure         => 'present',
+        owner          => 'root',
+        group          => 'root',
+        mode           => '0640',
+        ensure_newline => true,
+        warn           => true,
+        alias          => $grfile,
+      }
+      concat::fragment { "auditd_rules_group_begin_${grfile}":
+        target  => "${rule_groups_path}${grfile}",
+        content => template('auditd/audit.rules.begin.fragment.erb'),
+        order   =>  0,
+      }
+    }
   }
+
   file { '/etc/audisp/audispd.conf':
     ensure  => 'file',
     owner   => 'root',
@@ -499,6 +556,18 @@ class auditd (
   }
 
   # Manage the service
+  $subscribe = [ 
+    File['/etc/audit/auditd.conf'],
+    File['/etc/audisp/audispd.conf'],
+  ]
+  if $manage_service and ! $rule_groups_path {
+    $subscribe = $subscribe + Concat['audit-file']
+  }else{
+    $rule_groups.each | String $file | {
+      $subscribe = $subscribe + Concat[$file]
+    }
+  }
+
   if $manage_service {
     service { 'auditd':
       ensure    => $service_ensure,
@@ -506,12 +575,7 @@ class auditd (
       hasstatus => true,
       restart   => $service_restart,
       stop      => $service_stop,
-      subscribe => [
-        File['/etc/audit/auditd.conf'],
-        File['/etc/audisp/audispd.conf'],
-        Concat['audit-file'],
-      ],
+      subscribe => $subscribe
     }
   }
-
 }
